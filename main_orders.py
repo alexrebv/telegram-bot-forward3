@@ -4,18 +4,14 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 import gspread
-from aiogram import Bot
 from google.oauth2.service_account import Credentials
+from aiogram import Bot
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 
-# Переменные окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+ALERT_CHANNEL_ID = os.getenv("ALERT_CHANNEL_ID")
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
-ALERT_CHANNEL_ID = os.getenv("ALERT_CHANNEL_ID")  # канал для оповещений
-
-# Telegram bot
-bot = Bot(token=BOT_TOKEN)
 
 # Google Sheets
 creds_json = os.getenv("GOOGLE_CREDENTIALS")
@@ -24,94 +20,92 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 credentials = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
 gc = gspread.authorize(credentials)
 
-main_sheet = gc.sheet1  # основной лист с приходящими сообщениями
+# Основной лист
+main_sheet = gc.sheet1
+# Лист "Utro"
 try:
     utro_sheet = gc.worksheet("Utro")
-except gspread.exceptions.WorksheetNotFound:
-    utro_sheet = gc.add_worksheet(title="Utro", rows="1000", cols="10")
-    # Добавляем заголовки
-    utro_sheet.append_row(["Номер заказа", "Поставщик", "Дата", "Объект", "Статус"])
+except gspread.WorksheetNotFound:
+    utro_sheet = gc.add_worksheet(title="Utro", rows="100", cols="10")
+    utro_sheet.append_row(["Номер заказа", "Поставщик", "Дата", "Объект", "Статус", "Checked", "Время"])
 
-# Список поставщиков для группировки уведомлений
-SUPPLIERS = [
-    'ООО "ТД Восток" (без кофе)',
-    'ООО Фабрика ВБ',
-    'ИП Сенникова А.А.',
-    'ИП Есаулкова В.Г.',
-    'ООО «МЕГАФУД»',
-    'Сити ООО',
-    'ИП Макеев Артем Юрьевич(гр.1,2,нов)',
-    'ИП Хондкарян А. С.',
-    'ООО "Минводы Боржоми"',
-    'ООО ТД Лето',
-    'Скай ООО (RedBull)',
-    'МОЛОЧНАЯ ИМПЕРИЯ ООО',
-    'ООО МясПродукт'
-]
+bot = Bot(token=BOT_TOKEN)
 
 def parse_order_message(text):
-    """
-    Парсит сообщение 'Пора делать заказ!' и возвращает:
-    (номер заказа, поставщик, дата, объект)
-    """
-    if not text.startswith("Пора делать заказ!"):
-        return None
+    """Парсим сообщение 'Пора делать заказ!'"""
     try:
-        # Пример: Заказ #20250-609-0358 Сити ООО (поставка 25-09-2025) в ресторане DP+GHD Ярославский-06
-        order_part = text.split("Заказ ")[1]
-        order_number = order_part.split(" ")[0]
-        supplier = next((s for s in SUPPLIERS if s in order_part), "Неизвестный")
-        date_part = order_part.split("(")[1].split(")")[0].replace("поставка", "").strip()
-        obj = order_part.split("в ресторане")[1].strip()
-        return order_number, supplier, date_part, obj
+        import re
+        order_match = re.search(
+            r"Заказ #([\d\-]+) (.+?) \((?:поставка|доставка) (\d{2}-\d{2}-\d{4})\) в ресторане (.+?) ",
+            text,
+        )
+        if order_match:
+            order_number = order_match.group(1)
+            supplier = order_match.group(2)
+            date = order_match.group(3)
+            obj = order_match.group(4)
+            return order_number, supplier, date, obj
     except Exception as e:
-        logging.warning(f"Не удалось распарсить сообщение: {text}, ошибка: {e}")
-        return None
+        logging.error(f"Ошибка парсинга: {e}")
+    return None, None, None, None
 
-async def process_new_orders():
-    rows = main_sheet.get_all_values()
-    for idx, row in enumerate(rows[1:], start=2):
-        text = row[1] if len(row) > 1 else ""
-        status = row[2] if len(row) > 2 else ""
-        if "#checked" in status:
-            continue  # уже обработано
-
-        parsed = parse_order_message(text)
-        if parsed:
-            order_number, supplier, order_date, obj = parsed
-            utro_sheet.append_row([order_number, supplier, order_date, obj, "Новый"])
-            # Отмечаем строку как обработанную
-            main_sheet.update_cell(idx, 3, "#checked")
-            logging.info(f"Добавлен заказ {order_number} в Utro")
+async def check_new_orders():
+    """Проверяем новые заказы в sheet1"""
+    while True:
+        try:
+            all_rows = main_sheet.get_all_values()
+            for idx, row in enumerate(all_rows[1:], start=2):
+                text = row[1] if len(row) > 1 else ""
+                checked = row[5] if len(row) > 5 else ""
+                if "Пора делать заказ!" in text and checked != "#checked":
+                    logging.info(f"Найдена строка для парсинга: {text}")
+                    order_number, supplier, date, obj = parse_order_message(text)
+                    if all([order_number, supplier, date, obj]):
+                        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        utro_sheet.append_row([order_number, supplier, date, obj, "Новый", "#checked", now])
+                        logging.info(f"Записано в Utro: {order_number}, {supplier}, {date}, {obj}")
+                        main_sheet.update_cell(idx, 6, "#checked")
+                    else:
+                        logging.warning(f"Не удалось распарсить строку: {text}")
+        except Exception as e:
+            logging.error(f"Ошибка при проверке новых заказов: {e}")
+        await asyncio.sleep(10)
 
 async def send_alerts():
-    """
-    Группировка по поставщикам и дате и отправка оповещений в Telegram канал
-    """
-    rows = utro_sheet.get_all_values()[1:]
-    alerts = {}
-    for row in rows:
-        if len(row) < 5:
-            continue
-        supplier, date, obj, status = row[1], row[2], row[3], row[4]
-        if status != "Принято":
-            alerts.setdefault((supplier, date), []).append(obj)
-
-    for (supplier, date), objects in alerts.items():
-        message_text = f"Накладные не приняты\n{supplier}\n{date}\n" + "\n".join(objects)
-        await bot.send_message(chat_id=ALERT_CHANNEL_ID, text=message_text)
-        logging.info(f"Отправлено уведомление для {supplier} {date}")
-
-async def main_loop():
-    last_alert_time = datetime.now() - timedelta(hours=1)
+    """Отправляем новые заказы из Utro раз в час"""
     while True:
-        await process_new_orders()
-        # Отправка уведомлений каждый час
-        if datetime.now() - last_alert_time >= timedelta(hours=1):
-            await send_alerts()
-            last_alert_time = datetime.now()
-        await asyncio.sleep(10)  # проверка новых заказов каждые 10 секунд
+        try:
+            all_rows = utro_sheet.get_all_values()
+            if len(all_rows) > 1:
+                header, *data = all_rows
+                one_hour_ago = datetime.now() - timedelta(hours=1)
+                new_orders = []
+                for row in data:
+                    if len(row) >= 7:
+                        try:
+                            ts = datetime.strptime(row[6], "%Y-%m-%d %H:%M:%S")
+                            if ts >= one_hour_ago:
+                                new_orders.append(row)
+                        except Exception:
+                            continue
+                if new_orders:
+                    msg_lines = ["📦 Новые заказы за последний час:"]
+                    for order in new_orders:
+                        msg_lines.append(
+                            f"№{order[0]} | {order[1]} | {order[2]} | {order[3]}"
+                        )
+                    msg_text = "\n".join(msg_lines)
+                    await bot.send_message(ALERT_CHANNEL_ID, msg_text)
+                    logging.info(f"Отправлено уведомление в канал: {len(new_orders)} заказ(ов)")
+                else:
+                    logging.info("Новых заказов за последний час нет")
+        except Exception as e:
+            logging.error(f"Ошибка при отправке уведомлений: {e}")
+        await asyncio.sleep(3600)  # раз в час
+
+async def main():
+    logging.info("Бот запущен для обработки заказов и отправки уведомлений")
+    await asyncio.gather(check_new_orders(), send_alerts())
 
 if __name__ == "__main__":
-    logging.info("Бот заказов запущен")
-    asyncio.run(main_loop())
+    asyncio.run(main())
