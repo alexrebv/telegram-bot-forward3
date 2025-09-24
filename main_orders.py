@@ -1,134 +1,138 @@
 import os
 import json
-import logging
+import asyncio
 import gspread
-import base64
-import re
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
+import logging
+from datetime import datetime, timedelta
 from aiogram import Bot
+from google.oauth2.service_account import Credentials
 
 logging.basicConfig(level=logging.INFO)
 
 # Переменные окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
-CHANNEL_ID = "@SuppliersODaccept"
-GOOGLE_CREDENTIALS = os.getenv("GOOGLE_CREDENTIALS")
+ALERT_CHANNEL_ID = os.getenv("ALERT_CHANNEL_ID")  # @SuppliersODaccept
 
-# Настройка бота
+# Инициализация бота
 bot = Bot(token=BOT_TOKEN)
 
-# Настройка Google Sheets
-creds_dict = json.loads(GOOGLE_CREDENTIALS)
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/gmail.readonly"]
+# Google Sheets
+creds_json = os.getenv("GOOGLE_CREDENTIALS")
+creds_dict = json.loads(creds_json)
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 credentials = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
 gc = gspread.authorize(credentials)
 sheet = gc.open_by_key(SPREADSHEET_ID)
-utro_sheet = sheet.worksheet("Utro")  # Лист для новых заказов
-main_sheet = sheet.sheet1  # Основной лист с приходящими сообщениями
+utro_sheet = sheet.worksheet("Utro")
 
-# Настройка Gmail API
-gmail_service = build("gmail", "v1", credentials=credentials)
-
-# Список поставщиков
+# Поставщики
 SUPPLIERS = [
-    'ООО "ТД Восток" (без кофе)',
-    'ООО Фабрика ВБ',
-    'ИП Сенникова А.А.',
-    'ИП Есаулкова В.Г.',
-    'ООО «МЕГАФУД»',
-    'Сити ООО',
-    'ИП Макеев Артем Юрьевич(гр.1,2,нов)',
-    'ИП Хондкарян А. С.',
-    'ООО "Минводы Боржоми"',
-    'ООО ТД Лето',
-    'Скай ООО (RedBull)',
-    'МОЛОЧНАЯ ИМПЕРИЯ ООО',
-    'ООО МясПродукт'
+    "ООО \"ТД Восток\" (без кофе)",
+    "ООО Фабрика ВБ",
+    "ИП Сенникова А.А.",
+    "ИП Есаулкова В.Г.",
+    "ООО «МЕГАФУД»",
+    "Сити ООО",
+    "ИП Макеев Артем Юрьевич(гр.1,2,нов)",
+    "ИП Хондкарян А. С.",
+    "ООО \"Минводы Боржоми\"",
+    "ООО ТД Лето",
+    "Скай ООО (RedBull)",
+    "МОЛОЧНАЯ ИМПЕРИЯ ООО",
+    "ООО МясПродукт"
 ]
 
+CHECKED_COLUMN = 5  # столбец для отметки, что строка уже обработана
+
 def parse_order_message(text):
-    """Парсим строку типа 'Пора делать заказ!'"""
-    pattern = r"Заказ #([\d-]+) (.+?) \((?:поставка|доставка) (\d{2}-\d{2}-\d{4})\) в ресторане (.+?) "
-    match = re.search(pattern, text)
-    if match:
-        order_number, supplier, date, obj = match.groups()
-        return order_number, supplier, date, obj
-    return None, None, None, None
+    """
+    Парсит сообщение вида:
+    Пора делать заказ!
+    Заказ #20250-609-0358 Сити ООО (поставка 25-09-2025) в ресторане DP+GHD Ярославский-06 ожидает подтверждения
+    """
+    try:
+        if "Пора делать заказ!" not in text:
+            return None
+        # Номер заказа
+        order_idx = text.index("#") + 1
+        order_end = text.index(" ", order_idx)
+        order_number = text[order_idx:order_end]
 
-def parse_email_subject(subject):
-    """Парсим тему письма из Gmail"""
-    pattern = r"Заказ для ресторана (.+?) #([\d-]+) создан"
-    match = re.search(pattern, subject)
-    if match:
-        obj, order_number = match.groups()
-        return order_number, obj
-    return None, None
+        # Поставщик
+        supplier = next((s for s in SUPPLIERS if s in text), None)
 
-def get_new_gmail_messages():
-    """Получаем новые письма Gmail"""
-    results = gmail_service.users().messages().list(userId='me', q="is:unread").execute()
-    messages = results.get('messages', [])
-    parsed_messages = []
-    for msg in messages:
-        msg_data = gmail_service.users().messages().get(userId='me', id=msg['id']).execute()
-        headers = msg_data['payload']['headers']
-        subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '')
-        order_number, obj = parse_email_subject(subject)
-        if order_number and obj:
-            parsed_messages.append((order_number, obj))
-    return parsed_messages
+        # Дата
+        date_start = text.index("(поставка") + len("(поставка ")
+        date_end = text.index(")", date_start)
+        order_date = text[date_start:date_end]
 
-def process_utro_sheet():
-    """Обрабатываем новые сообщения 'Пора делать заказ!'"""
-    rows = main_sheet.get_all_values()
-    for row in rows:
-        text = row[1] if len(row) > 1 else ""
-        if "Пора делать заказ!" in text:
-            order_number, supplier, date, obj = parse_order_message(text)
-            if order_number and supplier and date and obj:
-                utro_sheet.append_row([order_number, supplier, date, obj])
-                logging.info(f"Добавлен заказ {order_number} в лист Utro")
+        # Объект
+        obj_start = text.index("в ресторане") + len("в ресторане ")
+        obj_end = text.index(" ожидает", obj_start)
+        obj = text[obj_start:obj_end]
 
-def update_orders_from_gmail():
-    """Отмечаем заказы как оформленные на основе Gmail"""
-    messages = get_new_gmail_messages()
-    if not messages:
-        return
-    utro_rows = utro_sheet.get_all_values()
-    for order_number, obj in messages:
-        for idx, row in enumerate(utro_rows, start=1):
-            if len(row) < 4:
-                continue
-            if row[0] == order_number and row[3] == obj:
-                # Обновляем статус в столбце "Заказ" (5-й столбец)
-                utro_sheet.update_cell(idx, 5, "Оформлен")
-                logging.info(f"Заказ {order_number} оформлен для {obj}")
+        return order_number, supplier, order_date, obj
+    except Exception as e:
+        logging.warning(f"Не удалось распарсить сообщение: {text}, ошибка: {e}")
+        return None
 
-def send_unreceived_notifications():
-    """Отправляем уведомления по заказам, которые ожидают доставку"""
-    utro_rows = utro_sheet.get_all_values()
-    grouped = {}
-    for row in utro_rows:
-        if len(row) < 5:
-            continue
-        order_number, supplier, date, obj, status = row[:5]
-        if status != "Оформлен":
-            key = (supplier, date)
-            grouped.setdefault(key, []).append(obj)
+async def process_new_orders():
+    while True:
+        try:
+            rows = utro_sheet.get_all_values()
+            for idx, row in enumerate(rows[1:], start=2):  # пропускаем заголовки
+                checked = row[CHECKED_COLUMN - 1] if len(row) >= CHECKED_COLUMN else ""
+                if checked == "#checked":
+                    continue
 
-    for (supplier, date), objects in grouped.items():
-        message = f"Накладные не приняты\n{supplier}\n{date}\n" + "\n".join(objects)
-        bot.send_message(chat_id=CHANNEL_ID, text=message)
-        logging.info(f"Отправлено уведомление по {supplier} на {date}")
+                text = row[1] if len(row) > 1 else ""
+                parsed = parse_order_message(text)
+                if parsed:
+                    order_number, supplier, order_date, obj = parsed
+                    # Обновляем строку в листе Utro
+                    utro_sheet.update(f"A{idx}:D{idx}", [[order_number, supplier, order_date, obj]])
+                    utro_sheet.update_cell(idx, CHECKED_COLUMN, "#checked")
+                    logging.info(f"Обработан заказ {order_number} для {obj}")
+        except Exception as e:
+            logging.error(f"Ошибка при обработке новых заказов: {e}")
 
-def main():
-    logging.info("Запуск обработки заказов")
-    process_utro_sheet()
-    update_orders_from_gmail()
-    send_unreceived_notifications()
-    logging.info("Обработка завершена")
+        await asyncio.sleep(10)  # проверка каждые 10 секунд
+
+async def send_delivery_alerts():
+    while True:
+        try:
+            rows = utro_sheet.get_all_values()
+            alerts = {}
+            for row in rows[1:]:
+                order_number = row[0] if len(row) > 0 else None
+                supplier = row[1] if len(row) > 1 else None
+                order_date = row[2] if len(row) > 2 else None
+                obj = row[3] if len(row) > 3 else None
+                status = row[4] if len(row) > 4 else ""
+
+                if order_number and supplier and order_date and obj and status != "#checked":
+                    # Если доставка ожидается, добавляем в словарь по поставщику и дате
+                    key = (supplier, order_date)
+                    if key not in alerts:
+                        alerts[key] = []
+                    alerts[key].append(obj)
+
+            for (supplier, date), objs in alerts.items():
+                message = f"Накладные не приняты\n{supplier}\n{date}\n" + "\n".join(objs)
+                await bot.send_message(chat_id=ALERT_CHANNEL_ID, text=message)
+                logging.info(f"Отправлено оповещение для {supplier}, {date}")
+        except Exception as e:
+            logging.error(f"Ошибка при отправке оповещений: {e}")
+
+        await asyncio.sleep(3600)  # раз в час
+
+async def main():
+    logging.info("Бот заказов запущен")
+    await asyncio.gather(
+        process_new_orders(),
+        send_delivery_alerts()
+    )
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
