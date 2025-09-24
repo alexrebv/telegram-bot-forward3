@@ -15,25 +15,26 @@ SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Подключение к Google Sheets
+# Google credentials
 creds_json = os.getenv("GOOGLE_CREDENTIALS")
 creds_dict = json.loads(creds_json)
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 credentials = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+
 gc = gspread.authorize(credentials)
 sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
 
 @dp.message()
-async def save_group_message(message: Message):
-    username = message.from_user.username or message.from_user.full_name
+async def save_channel_message(message: Message):
+    # В канале from_user обычно None, автор канала в sender_chat
+    author = message.sender_chat.title if message.sender_chat else "Unknown"
     text = message.text or "<нет текста>"
-    logging.info(f"Сообщение от {username}: {text}")
-
+    
     # Сохраняем в Google Sheets
-    sheet.append_row([username, text])
+    sheet.append_row([author, text])
+    logging.info(f"Сохранено сообщение от {author}: {text}")
 
 async def main():
-    logging.info("Бот запущен")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
