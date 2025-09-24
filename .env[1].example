@@ -1,0 +1,3 @@
+BOT_TOKEN=ваш_токен_бота
+SPREADSHEET_ID=ваш_ID_таблицы
+GOOGLE_CREDENTIALS=сюда_вы_не_пишете_ключ,_он_будет_в_Railway
