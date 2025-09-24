@@ -33,8 +33,9 @@ bot = Bot(token=BOT_TOKEN)
 
 def parse_order_message(text):
     """Парсим сообщение 'Пора делать заказ!'"""
+    import re
     try:
-        import re
+        logging.info(f"Пробуем парсить текст: {text}")
         order_match = re.search(
             r"Заказ #([\d\-]+) (.+?) \((?:поставка|доставка) (\d{2}-\d{2}-\d{4})\) в ресторане (.+?) ",
             text,
@@ -44,7 +45,10 @@ def parse_order_message(text):
             supplier = order_match.group(2)
             date = order_match.group(3)
             obj = order_match.group(4)
+            logging.info(f"Успешно распарсили: {order_number}, {supplier}, {date}, {obj}")
             return order_number, supplier, date, obj
+        else:
+            logging.warning("Регулярка не сработала!")
     except Exception as e:
         logging.error(f"Ошибка парсинга: {e}")
     return None, None, None, None
@@ -53,18 +57,24 @@ async def check_new_orders():
     """Проверяем новые заказы в sheet1"""
     while True:
         try:
+            logging.info("Читаем sheet1...")
             all_rows = main_sheet.get_all_values()
+            logging.info(f"Найдено {len(all_rows)} строк в sheet1")
+
             for idx, row in enumerate(all_rows[1:], start=2):
+                logging.info(f"Обрабатываем строку {idx}: {row}")
                 text = row[1] if len(row) > 1 else ""
                 checked = row[5] if len(row) > 5 else ""
+
                 if "Пора делать заказ!" in text and checked != "#checked":
-                    logging.info(f"Найдена строка для парсинга: {text}")
+                    logging.info(f"Найдена новая строка для обработки: {text}")
                     order_number, supplier, date, obj = parse_order_message(text)
                     if all([order_number, supplier, date, obj]):
                         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         utro_sheet.append_row([order_number, supplier, date, obj, "Новый", "#checked", now])
                         logging.info(f"Записано в Utro: {order_number}, {supplier}, {date}, {obj}")
                         main_sheet.update_cell(idx, 6, "#checked")
+                        logging.info(f"Строка {idx} отмечена как #checked")
                     else:
                         logging.warning(f"Не удалось распарсить строку: {text}")
         except Exception as e:
@@ -75,7 +85,10 @@ async def send_alerts():
     """Отправляем новые заказы из Utro раз в час"""
     while True:
         try:
+            logging.info("Проверка Utro для отправки уведомлений...")
             all_rows = utro_sheet.get_all_values()
+            logging.info(f"В Utro {len(all_rows)} строк")
+
             if len(all_rows) > 1:
                 header, *data = all_rows
                 one_hour_ago = datetime.now() - timedelta(hours=1)
@@ -91,9 +104,7 @@ async def send_alerts():
                 if new_orders:
                     msg_lines = ["📦 Новые заказы за последний час:"]
                     for order in new_orders:
-                        msg_lines.append(
-                            f"№{order[0]} | {order[1]} | {order[2]} | {order[3]}"
-                        )
+                        msg_lines.append(f"№{order[0]} | {order[1]} | {order[2]} | {order[3]}")
                     msg_text = "\n".join(msg_lines)
                     await bot.send_message(ALERT_CHANNEL_ID, msg_text)
                     logging.info(f"Отправлено уведомление в канал: {len(new_orders)} заказ(ов)")
@@ -101,7 +112,7 @@ async def send_alerts():
                     logging.info("Новых заказов за последний час нет")
         except Exception as e:
             logging.error(f"Ошибка при отправке уведомлений: {e}")
-        await asyncio.sleep(3600)  # раз в час
+        await asyncio.sleep(3600)
 
 async def main():
     logging.info("Бот запущен для обработки заказов и отправки уведомлений")
