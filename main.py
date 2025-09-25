@@ -2,7 +2,6 @@ import os
 import json
 import asyncio
 import logging
-from datetime import datetime
 import gspread
 from google.oauth2.service_account import Credentials
 from aiogram import Bot, Dispatcher, types
@@ -24,10 +23,10 @@ main_sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
 
 # --- Bot ---
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()  # aiogram 3.x не принимает bot в конструктор
+dp = Dispatcher()
 
 # --- Функции ---
-async def handle_channel_post(message: types.Message):
+async def handle_channel_message(message: types.Message):
     if message.chat.username != CHANNEL_ID.replace("@", ""):
         return
     text = message.text or ""
@@ -37,7 +36,8 @@ async def handle_channel_post(message: types.Message):
     except Exception as e:
         logging.error(f"Ошибка при записи в Google Sheet: {e}")
 
-dp.message.register(handle_channel_post, types.ContentType.TEXT)  # регистрируем обработчик текста
+# Регистрируем обработчик через dp.events.message
+dp.message.register(handle_channel_message)  # регистрируем на все текстовые сообщения
 
 # --- Основная функция ---
 async def main():
