@@ -1,6 +1,3 @@
-import os
-import json
-import asyncio
 import logging
 from datetime import datetime, timedelta
 import re
@@ -10,14 +7,16 @@ from aiogram import Bot, Dispatcher, types
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import base64
+import os
+import asyncio
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 
 # --- ENV ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ALERT_CHANNEL_ID = os.getenv("ALERT_CHANNEL_ID")  # канал для уведомлений
+ALERT_CHANNEL_ID = os.getenv("ALERT_CHANNEL_ID")
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
-CHANNEL_ID = os.getenv("CHANNEL_ID")  # канал для чтения сообщений
+CHANNEL_ID = os.getenv("CHANNEL_ID")
 
 # --- Google Sheets ---
 creds_json = os.getenv("GOOGLE_CREDENTIALS")
@@ -32,7 +31,7 @@ try:
     utro_sheet = gc.open_by_key(SPREADSHEET_ID).worksheet("Utro")
 except gspread.WorksheetNotFound:
     utro_sheet = gc.open_by_key(SPREADSHEET_ID).add_worksheet(title="Utro", rows="100", cols="10")
-    utro_sheet.append_row(["Номер заказа", "Поставщик", "Дата", "Объект", "Статус", "Checked", "Время"])
+    utro_sheet.append_row(["Номер заказа", "Поставщик", "Дата", "Объект", "Статус", "Время"])
 
 # --- Bot ---
 bot = Bot(token=BOT_TOKEN)
@@ -46,14 +45,16 @@ gmail_service = build('gmail', 'v1', credentials=credentials)
 def parse_order_message(text):
     """Парсим сообщение 'Пора делать заказ!'"""
     try:
-        logging.info(f"Пробуем парсить текст: {text}")
-        match = re.search(r"Заказ #([\d\-]+) (.+?) \((?:поставка|доставка) (\d{2}-\d{2}-\d{4})\) в ресторане (.+?) ожидает", text)
+        logging.info(f"Парсим текст: {text}")
+        match = re.search(
+            r"Заказ #([\wА-Яа-яЁё\d\-]+) (.+?) \((?:поставка|доставка) (\d{2}-\d{2}-\d{4})\) в ресторане (.+?) (?:ожидает|был оприходован)",
+            text
+        )
         if match:
             order_number = match.group(1)
             supplier = match.group(2)
             date = match.group(3)
             obj = match.group(4)
-            logging.info(f"Распарсили заказ: {order_number}, {supplier}, {date}, {obj}")
             return order_number, supplier, date, obj
     except Exception as e:
         logging.error(f"Ошибка парсинга: {e}")
@@ -67,7 +68,6 @@ async def handle_channel_post(message: types.Message):
     username = message.chat.title or "<название канала>"
     text = message.text or "<нет текста>"
     logging.info(f"Получено сообщение из канала: {text}")
-    # Записываем только в столбцы A и B
     main_sheet.append_row([username, text])
     logging.info("Сообщение записано в Google Sheets (A,B)")
 
@@ -79,18 +79,15 @@ async def check_new_orders():
             all_rows = main_sheet.get_all_values()
             for idx, row in enumerate(all_rows[1:], start=2):
                 text = row[1] if len(row) > 1 else ""
-                checked = row[5] if len(row) > 5 else ""
-                if "Пора делать заказ!" in text and checked != "#checked":
+                if "Пора делать заказ!" in text:
                     order_number, supplier, date, obj = parse_order_message(text)
                     if all([order_number, supplier, date, obj]):
                         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        utro_sheet.append_row([order_number, supplier, date, obj, "Новый", "#checked", now])
+                        utro_sheet.append_row([order_number, supplier, date, obj, "Новый", now])
                         logging.info(f"Записано в Utro: {order_number}, {supplier}, {date}, {obj}")
-                        main_sheet.update_cell(idx, 6, "#checked")
-                        logging.info(f"Строка {idx} отмечена как #checked")
         except Exception as e:
             logging.error(f"Ошибка при обработке заказов: {e}")
-        await asyncio.sleep(10)
+        await asyncio.sleep(5)
 
 # --- SEND ALERTS ---
 async def send_alerts():
@@ -105,9 +102,9 @@ async def send_alerts():
             one_hour_ago = datetime.now() - timedelta(hours=1)
             new_orders = []
             for row in data:
-                if len(row) >= 7:
+                if len(row) >= 6:
                     try:
-                        ts = datetime.strptime(row[6], "%Y-%m-%d %H:%M:%S")
+                        ts = datetime.strptime(row[5], "%Y-%m-%d %H:%M:%S")
                         if ts >= one_hour_ago:
                             new_orders.append(row)
                     except Exception:
@@ -115,7 +112,7 @@ async def send_alerts():
             if new_orders:
                 msg_lines = ["📦 Новые заказы за последний час:"]
                 for order in new_orders:
-                    msg_lines.append(f"{order[1]} | {order[2]} | {order[3]}")  # без номера заказа
+                    msg_lines.append(f"{order[1]} | {order[2]} | {order[3]}")
                 await bot.send_message(ALERT_CHANNEL_ID, "\n".join(msg_lines))
                 logging.info(f"Отправлено уведомление: {len(new_orders)} заказов")
             else:
@@ -131,15 +128,13 @@ async def check_gmail_orders():
             logging.info("Проверяем Gmail на письма 'Заказ отправлен'...")
             results = gmail_service.users().messages().list(userId='me', q='subject:"Заказ отправлен" is:unread').execute()
             messages = results.get('messages', [])
-            if not messages:
-                logging.info("Новых писем нет")
             for msg in messages:
                 msg_data = gmail_service.users().messages().get(userId='me', id=msg['id']).execute()
                 payload = msg_data['payload']
                 body = payload.get('body', {}).get('data')
                 if body:
                     msg_str = base64.urlsafe_b64decode(body.encode('ASCII')).decode('utf-8')
-                    match = re.search(r"Заказ #([\d\-]+)", msg_str)
+                    match = re.search(r"Заказ #([\wА-Яа-яЁё\d\-]+)", msg_str)
                     if match:
                         order_number = match.group(1)
                         logging.info(f"Найден заказ в письме: {order_number}")
