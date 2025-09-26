@@ -3,6 +3,7 @@ import json
 import asyncio
 import logging
 import gspread
+import signal
 from aiogram import Bot, Dispatcher, types
 from google.oauth2.service_account import Credentials
 
@@ -11,7 +12,7 @@ logging.basicConfig(level=logging.INFO)
 # ---------------- Конфигурация ----------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
-ALLOWED_CHAT_ID = int(os.getenv("CHANNEL_ID"))  # ID вашей группы
+ALLOWED_CHAT_ID = int(os.getenv("CHANNEL_ID"))  # ID вашей группы (отрицательный для супергруппы)
 
 # ---------------- Google Sheets ----------------
 creds_json = os.getenv("GOOGLE_CREDENTIALS")
@@ -35,7 +36,6 @@ dp = Dispatcher()
 # ---------------- Обработчик сообщений ----------------
 @dp.message()
 async def save_message(message: types.Message):
-    # Фильтр по конкретной группе
     if message.chat.id != ALLOWED_CHAT_ID:
         logging.info(f"Сообщение из чужого чата {message.chat.id}, пропускаем")
         return
@@ -54,6 +54,16 @@ async def save_message(message: types.Message):
     # Сохраняем сообщение
     sheet.append_row([message_id, user, text, date])
     logging.info(f"Новое сообщение сохранено: {message_id} | {text}")
+
+# ---------------- Обработка сигналов ----------------
+def shutdown(signalnum, frame):
+    logging.info(f"Получен сигнал завершения ({signalnum}), закрываем бота...")
+    loop = asyncio.get_event_loop()
+    loop.create_task(bot.close())
+    loop.stop()
+
+signal.signal(signal.SIGTERM, shutdown)
+signal.signal(signal.SIGINT, shutdown)
 
 # ---------------- Главная функция ----------------
 async def main():
