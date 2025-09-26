@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(me
 
 # --- ENV ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
+CHANNEL_ID = os.getenv("CHANNEL_ID")  # @имя_канала
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDENTIALS")
 
@@ -28,36 +28,18 @@ main_sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# --- HELPER FUNCTIONS ---
+# --- Helper function ---
 def get_existing_message_ids():
     """Возвращает множество ID сообщений, которые уже есть в sheet1"""
     all_values = main_sheet.get_all_values()
     return set(row[0] for row in all_values[1:] if len(row) > 0)
 
-async def fetch_and_sync_channel():
-    """Синхронизирует канал с листом, добавляя недостающие сообщения"""
-    existing_ids = get_existing_message_ids()
-    chat = await bot.get_chat(CHANNEL_ID)
-    last_message_id = None
-    more = True
-
-    while more:
-        history = await bot.get_chat_history(chat.id, limit=100, offset_id=last_message_id or 0)
-        if not history:
-            break
-        for msg in history:
-            msg_id = str(msg.message_id)
-            if msg_id not in existing_ids:
-                text = msg.text or "<нет текста>"
-                username = msg.chat.title or "<название канала>"
-                main_sheet.append_row([msg_id, username, text])
-                logging.info(f"Добавлено сообщение {msg_id}: {text}")
-        last_message_id = history[-1].message_id
-        more = len(history) == 100  # если меньше 100 — дошли до конца
-
 # --- CHANNEL MESSAGE HANDLER ---
 @dp.channel_post()
 async def handle_channel_post(message: types.Message):
+    """Сохраняет новые сообщения из канала в Google Sheets"""
+    if message.chat.username != CHANNEL_ID.replace("@", ""):
+        return
     msg_id = str(message.message_id)
     existing_ids = get_existing_message_ids()
     if msg_id in existing_ids:
@@ -69,11 +51,7 @@ async def handle_channel_post(message: types.Message):
 
 # --- MAIN ---
 async def main():
-    logging.info("Бот запущен: синхронизация канала с Google Sheets")
-    # Первичная синхронизация
-    await fetch_and_sync_channel()
-    logging.info("Первая синхронизация завершена")
-    # Постоянная обработка новых сообщений
+    logging.info("Бот запущен: запись новых сообщений из канала в Google Sheets")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
