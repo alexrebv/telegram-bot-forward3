@@ -5,7 +5,6 @@ import gspread
 import logging
 from aiogram import Bot, Dispatcher, types
 from google.oauth2.service_account import Credentials
-from aiogram.filters import Text
 
 logging.basicConfig(level=logging.INFO)
 
@@ -30,6 +29,7 @@ dp = Dispatcher()
 # --- Обработчик сообщений из канала ---
 @dp.message()
 async def handle_channel_post(message: types.Message):
+    # Проверка на канал
     if message.chat.username != CHANNEL_ID.replace("@", ""):
         return
 
