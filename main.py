@@ -27,15 +27,15 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 # --- Обработчик сообщений из канала ---
-@dp.message()
+@dp.channel_post()
 async def handle_channel_post(message: types.Message):
-    # Проверка на канал
+    # Проверяем канал
     if message.chat.username != CHANNEL_ID.replace("@", ""):
         return
 
     username = message.chat.title or "<название канала>"
     text = message.text or "<нет текста>"
-    logging.info(f"Получено сообщение из канала: {text}")
+    logging.info(f"Получено сообщение из канала: {text[:50]}...")
 
     try:
         sheet.append_row([username, text])
