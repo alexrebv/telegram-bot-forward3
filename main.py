@@ -1,15 +1,18 @@
 import logging
+import json
 from datetime import datetime, timedelta
 import re
-import gspread
-from google.oauth2.service_account import Credentials
-from aiogram import Bot, Dispatcher, types
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-import base64
 import os
+import base64
 import asyncio
 
+import gspread
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from aiogram import Bot, Dispatcher, types
+
+# --- LOGGING ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 
 # --- ENV ---
@@ -17,10 +20,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ALERT_CHANNEL_ID = os.getenv("ALERT_CHANNEL_ID")
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
+GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDENTIALS")
 
 # --- Google Sheets ---
-creds_json = os.getenv("GOOGLE_CREDENTIALS")
-creds_dict = json.loads(creds_json)
+creds_dict = json.loads(GOOGLE_CREDS_JSON)
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 credentials = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
 gc = gspread.authorize(credentials)
