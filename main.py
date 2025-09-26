@@ -1,73 +1,44 @@
 import os
 import json
 import asyncio
-import logging
 import gspread
-import signal
+import logging
 from aiogram import Bot, Dispatcher, types
 from google.oauth2.service_account import Credentials
 
 logging.basicConfig(level=logging.INFO)
 
-# ---------------- Конфигурация ----------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
-ALLOWED_CHAT_ID = int(os.getenv("CHANNEL_ID"))  # ID вашей группы (отрицательный для супергруппы)
+CHANNEL_ID = os.getenv("CHANNEL_ID")  # @имя_канала
 
-# ---------------- Google Sheets ----------------
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+
+# Google Sheets
 creds_json = os.getenv("GOOGLE_CREDENTIALS")
 creds_dict = json.loads(creds_json)
-
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 credentials = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
 
 gc = gspread.authorize(credentials)
-sheet = gc.open_by_key(SPREADSHEET_ID).sheet1  # Sheet1
+sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
 
-# Добавим заголовки, если лист пустой
-if sheet.row_count == 0 or sheet.get_all_values() == []:
-    sheet.append_row(["Message ID", "Username", "Text", "Date"])
-    logging.info("Добавлены заголовки на Sheet1")
-
-# ---------------- Aiogram ----------------
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
-
-# ---------------- Обработчик сообщений ----------------
-@dp.message()
-async def save_message(message: types.Message):
-    if message.chat.id != ALLOWED_CHAT_ID:
-        logging.info(f"Сообщение из чужого чата {message.chat.id}, пропускаем")
+@dp.channel_post()
+async def handle_channel_post(message: types.Message):
+    # Проверяем, что сообщение именно из нужного канала
+    if message.chat.username != CHANNEL_ID.replace("@", ""):
         return
 
-    message_id = message.message_id
-    user = message.from_user.username or message.from_user.full_name
+    username = message.chat.title or "<название канала>"
     text = message.text or "<нет текста>"
-    date = message.date.strftime("%Y-%m-%d %H:%M:%S")
+    logging.info(f"Получено сообщение из канала: {text}")
 
-    # Проверка дубликатов по message_id
-    existing_ids = sheet.col_values(1)
-    if str(message_id) in existing_ids:
-        logging.info(f"Пропущено (дубликат): {message_id}")
-        return
+    sheet.append_row([username, text])
+    logging.info("Сообщение записано в Google Sheets")
 
-    # Сохраняем сообщение
-    sheet.append_row([message_id, user, text, date])
-    logging.info(f"Новое сообщение сохранено: {message_id} | {text}")
-
-# ---------------- Обработка сигналов ----------------
-def shutdown(signalnum, frame):
-    logging.info(f"Получен сигнал завершения ({signalnum}), закрываем бота...")
-    loop = asyncio.get_event_loop()
-    loop.create_task(bot.close())
-    loop.stop()
-
-signal.signal(signal.SIGTERM, shutdown)
-signal.signal(signal.SIGINT, shutdown)
-
-# ---------------- Главная функция ----------------
 async def main():
-    logging.info("Бот запущен, ожидаем новые сообщения...")
+    logging.info("Бот запущен для чтения канала")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
