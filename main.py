@@ -1,3 +1,30 @@
+import logging
+import json
+import os
+import asyncio
+
+import gspread
+from google.oauth2.service_account import Credentials
+from aiogram import Bot, Dispatcher, types
+
+# --- LOGGING ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+
+# --- ENV ---
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
+GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDENTIALS")
+
+# --- Google Sheets ---
+creds_dict = json.loads(GOOGLE_CREDS_JSON)
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+credentials = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+gc = gspread.authorize(credentials)
+
+main_sheet = gc.open_by_key(SPREADSHEET_ID).sheet1
+
+# --- Bot ---
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
